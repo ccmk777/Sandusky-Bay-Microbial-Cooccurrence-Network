@@ -1,0 +1,224 @@
+---
+title: "co-occurence"
+author: "carson montz"
+date: "2023-08-02"
+output: html_document
+---
+```{r}
+#call necesarry packages
+library(igraph)
+#library(ggpraph) #sometimes it gives me a random error that this package doesnt exist, might just be in ggplot2
+library(microbiome)
+library(phyloseq)
+```
+
+#this is going to be largely repetative- I am loading the necessary 18s and 16s files, and removing all Blanks and BR samples. This entire code has to be ran in a seperate file than either the 16s or 18s previous code because of how certain packages were embedded/installed within the installation of other packages (like phyloseq). This caused igreph to install at an older version, which made it impossible to library(ggraph) as ggraph needed a newer version of igraph than the one embedded in the other markdown session. I don't quite understand what happened, but i know it is solved by starting fresh.
+```{r}
+
+
+# Load the count table
+count_table <- read.table("/home/spanuser3/Documents/18ASvs_counts-no-contamB.txt", sep="\t", header=TRUE, row.names= 1)
+
+
+# Identify the columns that include "Blank" in their names
+blank_columns <- grepl("Blank", colnames(count_table))
+
+# Remove the identified blank columns from the count table
+count_table_filtered <- count_table[, !blank_columns]
+
+
+# Extract the columns from Count_table_filtered that do not contain "BR" in their column names
+br_cols <- grep("BR", colnames(count_table_filtered), value = TRUE)
+
+# Subset Count_table_filtered to remove the columns with "BR" in their names
+count_table_filtered <- count_table_filtered[, !(colnames(count_table_filtered) %in% br_cols)]
+
+
+#this metadata will have data added to it in excel (columns Date, Site). Load in updated metadata
+MetaData <- read.table("/home/spanuser3/Documents/18s.MetadataB.tsv.txt", sep="\t", header=TRUE, row.names = 1)
+
+# Get the row names (headers) that contain "BR"
+br_row_headers <- rownames(MetaData)[grep("BR", rownames(MetaData))]
+#br_row_headersB <- br_row_headers[-2]
+
+# Remove the rows with headers that contain "BR"
+MetaDataB <- MetaData[!(rownames(MetaData) %in% br_row_headers), ]
+
+
+# Load the taxonomy table
+taxonomy_table <- read.table("/home/spanuser3/Documents/18ASVs_taxonomy-no-contamB.txt", sep="\t", header=TRUE, row.names=1)
+
+#count_table_filtered, MetaDataB, taxonomy_table
+
+```
+
+#now repeat for 16s count_table and metadata
+```{r}
+# Load the count table
+count_table_16 <- read.table("/home/spanuser3/Documents/16s.outputs/16ASVs_counts-no-contam.tsv", sep="\t", header=TRUE, row.names=1)
+
+
+# Identify the columns that include "Blank" in their names
+blank_columns_16 <- grepl("Blank", colnames(count_table_16))
+#5 blanks
+
+# Remove the identified blank columns from the count table
+count_table_filtered_16 <- count_table_16[, !blank_columns_16]
+
+
+# Extract the columns from Count_table_filtered that do not contain "BR" in their column names
+br_cols_16 <- grep("BR", colnames(count_table_filtered_16), value = TRUE)
+
+
+# Subset Count_table_filtered to remove the columns with "BR" in their names
+count_table_filtered_16b <- count_table_filtered_16[, !(colnames(count_table_filtered_16) %in% br_cols_16)]
+
+
+
+# Read the TXT file into a data frame
+MetaData_16 <- read.table("/home/spanuser3/Documents/16s.outputs/16s.MetaDataB.txt", sep = "\t", header = TRUE, row.names = 1)
+#header=TRUE and rown.names=1 must be applied to correctly format
+
+# Get the row names (headers) that contain "BR"
+br_row_headersBc <- rownames(MetaData_16)[grep("BR", rownames(MetaData_16))]
+
+# Remove the rows with headers that contain "BR"
+MetaData16b <- MetaData_16[!(rownames(MetaData_16) %in% br_row_headersBc), ]
+
+
+# Load the taxonomy table
+taxonomy_table16 <- read.table("/home/spanuser3/Documents/16s.outputs/16ASVs_taxonomy-no-contam.tsv", sep="\t", header=TRUE, row.names=1)
+
+#count_table_filtered_16b, MetaData16b, taxonomy_table16
+#count_table_filtered, MetaDataB, taxonomy_table
+
+
+```
+
+#now lets check to name sure all of our sample ids match between the 18s and 16s data, and remove any ids that are not shared so we can merged them together
+```{r}
+# Assuming count_table_filtered16s and count_table_filtered are the count tables for 16S and 18S, respectively
+sample_ids_16s <- colnames(count_table_filtered_16b)
+sample_ids_18s <- colnames(count_table_filtered)
+
+#Find common sample IDs
+common_sample_ids <- intersect(sample_ids_16s, sample_ids_18s)
+common_sample_ids
+#it gave 52 samples
+# Check if all common sample IDs are present in the 16S dataset
+all_common_samples_in_16s <- all(common_sample_ids %in% sample_ids_16s)
+all_common_samples_in_16s
+#TRUE, meaning the 16s metadata object will suffice as a metadata for both 18s and 16s once we remove the non-consistent samples from the 18s data. 
+
+# Subset the 18S count table to include only the samples that match the samples in the 16S dataset
+count_table_filtered18s <- count_table_filtered[, common_sample_ids]
+
+# Convert the filtered count tables to an OTU table
+count_table_otu18 <- otu_table(as.matrix(count_table_filtered18s), taxa_are_rows=TRUE)
+count_table_otu16 <- otu_table(as.matrix(count_table_filtered_16b), taxa_are_rows=TRUE)
+
+#convert the taxonomy table 
+tax_table16 <- tax_table(as.matrix(taxonomy_table16))
+tax_table18 <- tax_table(as.matrix(taxonomy_table))
+
+#format metadata so that it is ready to be merged into a phyloseq object
+sixteen.meta <-sample_data(MetaData16b)
+```
+
+#create 18s and 16s phyloseq object, then aggregate to genus level, and transform to compositional. I don't want to impact any ntural trends in the data for the co-occurence network analysis, so I'm not going to rarify the data.
+```{r}
+#create 18s phyloseq object by merging the components
+merged_phyloseq18 <- merge_phyloseq(count_table_otu18, tax_table18, sixteen.meta)
+
+#create 16s phyloseq object by merging the components
+merged_phyloseq16 <- merge_phyloseq(count_table_otu16, tax_table16, sixteen.meta)
+
+# Aggregate the 18S data to the genus level
+agg.genus_18 <- aggregate_taxa(merged_phyloseq18, "Genus")
+# Aggregate the 16S data to the genus level
+agg.genus_16 <- aggregate_taxa(merged_phyloseq16, "Genus")
+
+comp.genus18 <- microbiome::transform(agg.genus_18, "compositional")
+comp.genus16 <- microbiome::transform(agg.genus_16, "compositional")
+
+#get the names of the top "X" most abundant taxa at genus level (assume "unknown" will be in there somehwere, so start with 26)
+names.genus18 <- top_taxa(comp.genus18, n=21)
+names.genus16 <- top_taxa(comp.genus16, n=21)
+names.genus18
+names.genus16
+
+
+#t 1st taxa was "unknown" in both, let's remove that.
+names.genus18 <- names.genus18[-1]
+names.genus16 <- names.genus16[-1]
+
+# Subset the taxa in the original object to only the top 25 most abundant at genus level
+sub_gen18 <- prune_taxa(names.genus18, comp.genus18)
+sub_gen16 <- prune_taxa(names.genus16, comp.genus16)
+
+
+# Merge the 18S and 16S data into a single `phyloseq` object
+merged_phyloseq_data <- merge_phyloseq(sub_gen16, sub_gen18)
+
+save.image("/home/spanuser3/Documents/my_workspace_merged.RData")
+#load("/home/spanuser3/Documents/my_workspace_merged.RData")
+
+
+
+```
+
+```{r}
+
+
+subset_phyloseq_Site1 <- aggregate_taxa(merged_phyloseq_data, "Genus")
+
+#Get the OTU names for nodes (if we skip this the names will include all previous taxa levels)
+taxic <- as.data.frame(merged_phyloseq_data@tax_table)
+Network_Names <- taxic$Genus
+
+
+# Get the abundance data (OTU table) from the phyloseq object
+abundance_data_site1 <- otu_table(t(merged_phyloseq_data))
+
+# Calculate the Spearman correlation matrix
+cor_matrix <- cor(abundance_data_site1, method = "spearman")
+
+# Set edge weights to zero for correlations that don't meet the absolute value threshold
+threshold <- 0.6
+cor_matrix[cor_matrix >= -threshold & cor_matrix <= threshold] <- 0
+
+# Create an igraph graph object from the binary adjacency matrix
+cooccurrence_network <- graph_from_adjacency_matrix(cor_matrix, mode = "undirected", weighted = TRUE, diag = FALSE)
+
+# Add the OTU names (node labels) to the network
+V(cooccurrence_network)$name <- Network_Names
+
+# Get the edge weights (correlation values)
+edge_weights <- E(cooccurrence_network)$weight
+
+# Choose a layout algorithm (layout_nicely)
+layout_algorithm <- "nicely"
+
+# Define colors for positive and negative edge weights
+positive_color <- "blue"
+negative_color <- "red"
+
+# Visualize the network using ggraph
+Merged18.16.Network.Genus <- ggraph(cooccurrence_network, layout = layout_algorithm) + 
+  geom_edge_link(aes(edge_width = abs(edge_weights), color = ifelse(edge_weights >= threshold, positive_color, negative_color)),
+                 edge_alpha = 0.6) +
+  scale_edge_color_identity() +
+  geom_node_point() +
+  geom_node_text(aes(label = name), repel = TRUE) +
+  theme_void()
+
+Merged18.16.Network.Genus
+
+# Specify the full path and file name for the PDF file
+output_file <- "/home/spanuser3/Documents/co_occurrence_network.fam.pdf"
+
+# Save the plot as a PDF file
+ggsave(filename = output_file, plot = Merged18.16.Network.Genus, width = 10, height = 8)
+
+
+```
